@@ -186,6 +186,10 @@ func (c command) expectedError() (err error) {
 }
 
 func addSpectestModule(t *testing.T, store *wasm.Store) {
+	// Add the host module
+	spectest := &wasm.ModuleInstance{Name: "spectest", Exports: map[string]*wasm.ExportInstance{}}
+	store.ModuleInstances[spectest.Name] = spectest
+
 	var printV = func() {}
 	var printI32 = func(uint32) {}
 	var printF32 = func(float32) {}
@@ -205,7 +209,7 @@ func addSpectestModule(t *testing.T, store *wasm.Store) {
 	} {
 		fn, err := wasm.NewGoFunc(n, v)
 		require.NoError(t, err)
-		_, err = store.AddHostFunction("spectest", fn)
+		_, err = store.AddHostFunction(spectest, fn)
 		require.NoError(t, err, "AddHostFunction(%s)", n)
 	}
 
@@ -219,14 +223,14 @@ func addSpectestModule(t *testing.T, store *wasm.Store) {
 		{name: "global_f32", valueType: wasm.ValueTypeF32, value: uint64(uint32(0x44268000))},
 		{name: "global_f64", valueType: wasm.ValueTypeF64, value: uint64(0x4084d00000000000)},
 	} {
-		require.NoError(t, store.AddGlobal("spectest", g.name, g.value, g.valueType, false), "AddGlobal(%s)", g.name)
+		require.NoError(t, store.AddGlobal(spectest, g.name, g.value, g.valueType, false), "AddGlobal(%s)", g.name)
 	}
 
 	tableLimitMax := uint32(20)
-	require.NoError(t, store.AddTableInstance("spectest", "table", 10, &tableLimitMax))
+	require.NoError(t, store.AddTableInstance(spectest, "table", 10, &tableLimitMax))
 
 	memoryLimitMax := uint32(2)
-	require.NoError(t, store.AddMemoryInstance("spectest", "memory", 1, &memoryLimitMax))
+	require.NoError(t, store.AddMemoryInstance(spectest, "memory", 1, &memoryLimitMax))
 }
 
 func TestJIT(t *testing.T) {

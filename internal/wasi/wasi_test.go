@@ -789,7 +789,11 @@ func instantiateWasmStore(t *testing.T, wasiFunction, wasiImport, moduleName str
 	fn, err := wasm.NewGoFunc(wasiFunction, goFunc)
 	require.NoError(t, err)
 
-	wasiFn, err := store.AddHostFunction(wasi.ModuleSnapshotPreview1, fn)
+	// Add the host module
+	hostModule := &wasm.ModuleInstance{Name: wasi.ModuleSnapshotPreview1, Exports: map[string]*wasm.ExportInstance{}}
+	store.ModuleInstances[hostModule.Name] = hostModule
+
+	wasiFn, err := store.AddHostFunction(hostModule, fn)
 	require.NoError(t, err)
 
 	instantiated, err := store.Instantiate(mod, moduleName)

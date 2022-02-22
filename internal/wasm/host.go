@@ -87,11 +87,15 @@ func (s *Store) ExportHostFunctions(moduleName string, nameToGoFunc map[string]i
 		return nil, err
 	}
 
-	ret := HostExports{NameToFunctionInstance: make(map[string]*FunctionInstance, len(nameToGoFunc))}
+	exportCount := len(nameToGoFunc)
+
+	hostModule := &ModuleInstance{Name: moduleName, Exports: make(map[string]*ExportInstance, exportCount)}
+	s.ModuleInstances[moduleName] = hostModule
+	ret := HostExports{NameToFunctionInstance: make(map[string]*FunctionInstance, exportCount)}
 	for name, goFunc := range nameToGoFunc {
 		if hf, err := NewGoFunc(name, goFunc); err != nil {
 			return nil, err
-		} else if function, err := s.AddHostFunction(moduleName, hf); err != nil {
+		} else if function, err := s.AddHostFunction(hostModule, hf); err != nil {
 			return nil, err
 		} else {
 			ret.NameToFunctionInstance[name] = function
@@ -113,15 +117,6 @@ func (s *Store) requireModuleUnused(moduleName string) error {
 // HostExports implements wasm.HostExports
 type HostExports struct {
 	NameToFunctionInstance map[string]*FunctionInstance
-}
-
-// call implements wasm.HostFunction
-func (f *FunctionInstance) call(ctx publicwasm.ModuleContext, params ...uint64) ([]uint64, error) {
-	hCtx, ok := ctx.(*ModuleContext)
-	if !ok { // TODO: guard that hCtx.Module actually imported this!
-		return nil, fmt.Errorf("this function was not imported by %s", ctx)
-	}
-	return hCtx.engine.Call(hCtx, f, params...)
 }
 
 // Function implements wasm.HostExports Function

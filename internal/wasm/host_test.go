@@ -1,7 +1,6 @@
 package internalwasm
 
 import (
-	"context"
 	"math"
 	"testing"
 
@@ -446,65 +445,6 @@ func TestMemoryInstance_WriteFloat64Le(t *testing.T) {
 			if tc.expectedOk {
 				require.Equal(t, tc.expectedBytes, memory.Buffer[tc.offset:tc.offset+8]) // 8 is the size of float64
 			}
-		})
-	}
-}
-
-func TestFunction_Call(t *testing.T) {
-	name := "test"
-	fn := "fn"
-	engine := &nopEngine{}
-	s := NewStore(context.Background(), engine)
-	m := &ModuleInstance{
-		Name: name,
-		Exports: map[string]*ExportInstance{
-			fn: {
-				Kind: ExportKindFunc,
-				Function: &FunctionInstance{
-					FunctionKind: FunctionKindWasm,
-					FunctionType: &TypeInstance{
-						Type: &FunctionType{
-							Params:  []ValueType{},
-							Results: []ValueType{},
-						},
-					},
-				},
-			},
-		},
-	}
-	ctx := NewModuleContext(context.Background(), s.Engine, m)
-	s.ModuleInstances[name] = m
-	m.Context = ctx
-
-	type testKey struct{}
-	ctxVal := context.WithValue(context.Background(), testKey{}, "test")
-
-	tests := []struct {
-		name      string
-		ctx       context.Context
-		actualCtx context.Context
-	}{
-		{
-			name:      "nil context",
-			ctx:       nil,
-			actualCtx: context.Background(),
-		},
-		{
-			name:      "background context",
-			ctx:       context.Background(),
-			actualCtx: context.Background(),
-		},
-		{
-			name:      "context with value",
-			ctx:       ctxVal,
-			actualCtx: ctxVal,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := (&function{ctx, m.Exports[fn].Function}).Call(tt.ctx)
-			require.NoError(t, err)
-			require.Equal(t, tt.actualCtx, engine.ctx.ctx)
 		})
 	}
 }

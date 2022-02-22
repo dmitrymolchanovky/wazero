@@ -266,7 +266,12 @@ func (s *Store) Instantiate(module *Module, name string) (*ModuleInstance, error
 		}
 	}
 
-	instance := &ModuleInstance{Name: name}
+	instance := &ModuleInstance{Name: name, Exports: map[string]*ExportInstance{}}
+	// Build the default context for calls to this module
+	modCtx := NewModuleContext(s.ctx, s.Engine, instance)
+	instance.Context = modCtx
+
+	s.ModuleInstances[name] = instance
 	for _, t := range module.TypeSection {
 		typeInstance, err := s.getTypeInstance(t)
 		if err != nil {
@@ -275,7 +280,6 @@ func (s *Store) Instantiate(module *Module, name string) (*ModuleInstance, error
 		instance.Types = append(instance.Types, typeInstance)
 	}
 
-	s.ModuleInstances[name] = instance
 	// Resolve the imports before doing the actual instantiation (mutating store).
 	if err := s.resolveImports(module, instance); err != nil {
 		return nil, fmt.Errorf("resolve imports: %w", err)
@@ -322,17 +326,13 @@ func (s *Store) Instantiate(module *Module, name string) (*ModuleInstance, error
 		}
 	}
 
-	// Build the default context for calls to this module
-	modCtx := NewModuleContext(s.ctx, s.Engine, instance)
-	instance.Context = modCtx
-
 	// Now we are safe to finalize the state.
 	rollbackFuncs = nil
 
 	// Execute the start function.
 	if module.StartSection != nil {
 		funcIdx := *module.StartSection
-		if _, err = s.Engine.Call(modCtx, instance.Functions[funcIdx]); err != nil {
+		if _, err = s.Engine.Call(instance.Context, instance.Functions[funcIdx]); err != nil {
 			return nil, fmt.Errorf("module[%s] start function failed: %w", name, err)
 		}
 	}
@@ -664,6 +664,15 @@ func (s *Store) buildFunctionInstances(module *Module, target *ModuleInstance) (
 	return rollbackFuncs, nil
 }
 
+// call implements wasm.HostFunction and wasm.Function
+func (f *FunctionInstance) call(ctx publicwasm.ModuleContext, params ...uint64) ([]uint64, error) {
+	hCtx, ok := ctx.(*ModuleContext)
+	if !ok { // TODO: guard that hCtx.Module actually imported this!
+		return nil, fmt.Errorf("this function was not imported by %s", ctx)
+	}
+	return hCtx.engine.Call(hCtx, f, params...)
+}
+
 func (s *Store) buildMemoryInstances(module *Module, target *ModuleInstance) (rollbackFuncs []func(), err error) {
 	// Allocate memory instances.
 	for _, memSec := range module.MemorySection {
@@ -677,6 +686,7 @@ func (s *Store) buildMemoryInstances(module *Module, target *ModuleInstance) (ro
 			Min:    memSec.Min,
 			Max:    memSec.Max,
 		}
+		target.Context.memory = target.MemoryInstance // assign this as the default memory
 		s.Memories = append(s.Memories, target.MemoryInstance)
 	}
 
@@ -866,16 +876,14 @@ func DecodeBlockType(types []*TypeInstance, r io.Reader) (*FunctionType, uint64,
 // exists for this module and name it is ignored rather than overwritten.
 //
 // Note: The wasm.Memory of the fn will be from the importing module.
-// Note: The ModuleInstance of this host function is lazy created and only includes exported functions and their types.
-func (s *Store) AddHostFunction(moduleName string, hf *GoFunc) (*FunctionInstance, error) {
-	m := s.getModuleInstance(moduleName)
+func (s *Store) AddHostFunction(m *ModuleInstance, hf *GoFunc) (*FunctionInstance, error) {
 	typeInstance, err := s.getTypeInstance(hf.functionType)
 	if err != nil {
 		return nil, err
 	}
 
 	f := &FunctionInstance{
-		Name:           fmt.Sprintf("%s.%s", moduleName, hf.wasmFunctionName),
+		Name:           fmt.Sprintf("%s.%s", m.Name, hf.wasmFunctionName),
 		HostFunction:   hf.goFunc,
 		FunctionKind:   hf.functionKind,
 		FunctionType:   typeInstance,
@@ -897,33 +905,31 @@ func (s *Store) AddHostFunction(moduleName string, hf *GoFunc) (*FunctionInstanc
 	return f, nil
 }
 
-func (s *Store) AddGlobal(moduleName, name string, value uint64, valueType ValueType, mutable bool) error {
+func (s *Store) AddGlobal(m *ModuleInstance, name string, value uint64, valueType ValueType, mutable bool) error {
 	g := &GlobalInstance{
 		Val:  value,
 		Type: &GlobalType{Mutable: mutable, ValType: valueType},
 	}
 	s.Globals = append(s.Globals, g)
 
-	m := s.getModuleInstance(moduleName)
 	return m.addExport(name, &ExportInstance{Kind: ExportKindGlobal, Global: g})
 }
 
-func (s *Store) AddTableInstance(moduleName, name string, min uint32, max *uint32) error {
+func (s *Store) AddTableInstance(m *ModuleInstance, name string, min uint32, max *uint32) error {
 	t := newTableInstance(min, max)
 	s.Tables = append(s.Tables, t)
 
-	m := s.getModuleInstance(moduleName)
 	return m.addExport(name, &ExportInstance{Kind: ExportKindTable, Table: t})
 }
 
-func (s *Store) AddMemoryInstance(moduleName, name string, min uint32, max *uint32) error {
+func (s *Store) AddMemoryInstance(m *ModuleInstance, name string, min uint32, max *uint32) error {
 	memory := &MemoryInstance{
 		Buffer: make([]byte, memoryPagesToBytesNum(min)),
 		Min:    min,
 		Max:    max,
 	}
 	s.Memories = append(s.Memories, memory)
-	m := s.getModuleInstance(moduleName)
+
 	return m.addExport(name, &ExportInstance{Kind: ExportKindMemory, Memory: memory})
 }
 
@@ -939,16 +945,6 @@ func (s *Store) getTypeInstance(t *FunctionType) (*TypeInstance, error) {
 		s.TypeIDs[key] = id
 	}
 	return &TypeInstance{Type: t, TypeID: id}, nil
-}
-
-// getModuleInstance returns an existing ModuleInstance if exists, or assigns a new one.
-func (s *Store) getModuleInstance(name string) *ModuleInstance {
-	m, ok := s.ModuleInstances[name]
-	if !ok {
-		m = &ModuleInstance{Name: name, Exports: map[string]*ExportInstance{}}
-		s.ModuleInstances[name] = m
-	}
-	return m
 }
 
 func newTableInstance(min uint32, max *uint32) *TableInstance {
