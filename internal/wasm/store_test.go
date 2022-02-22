@@ -15,6 +15,79 @@ import (
 	"github.com/tetratelabs/wazero/wasm"
 )
 
+func TestModuleInstance_Memory(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       *Module
+		expected    bool
+		expectedLen uint32
+	}{
+		{
+			name:  "no memory",
+			input: &Module{},
+		},
+		{
+			name:  "memory not exported",
+			input: &Module{MemorySection: []*MemoryType{{1, nil}}},
+		},
+		{
+			name:  "memory not exported, one page",
+			input: &Module{MemorySection: []*MemoryType{{1, nil}}},
+		},
+		{
+			name: "memory exported, different name",
+			input: &Module{
+				MemorySection: []*MemoryType{{1, nil}},
+				ExportSection: map[string]*Export{"momory": {Kind: ExportKindMemory, Name: "momory", Index: 0}},
+			},
+		},
+		{
+			name: "memory exported, but zero length",
+			input: &Module{
+				MemorySection: []*MemoryType{{0, nil}},
+				ExportSection: map[string]*Export{"memory": {Kind: ExportKindMemory, Name: "memory", Index: 0}},
+			},
+			expected: true,
+		},
+		{
+			name: "memory exported, one page",
+			input: &Module{
+				MemorySection: []*MemoryType{{1, nil}},
+				ExportSection: map[string]*Export{"memory": {Kind: ExportKindMemory, Name: "memory", Index: 0}},
+			},
+			expected:    true,
+			expectedLen: 65536,
+		},
+		{
+			name: "memory exported, two pages",
+			input: &Module{
+				MemorySection: []*MemoryType{{2, nil}},
+				ExportSection: map[string]*Export{"memory": {Kind: ExportKindMemory, Name: "memory", Index: 0}},
+			},
+			expected:    true,
+			expectedLen: 65536 * 2,
+		},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewStore(context.Background(), nopEngineInstance)
+
+			instance, err := s.Instantiate(tc.input, "test")
+			require.NoError(t, err)
+
+			mem := instance.Memory("memory")
+			if tc.expected {
+				require.Equal(t, tc.expectedLen, mem.Size())
+			} else {
+				require.Nil(t, mem)
+			}
+		})
+	}
+}
+
 func TestStore_GetModuleInstance(t *testing.T) {
 	name := "test"
 

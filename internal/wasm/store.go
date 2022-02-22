@@ -40,9 +40,6 @@ type (
 		// hostExports holds host functions by module name from ExportHostFunctions.
 		hostExports map[string]*HostExports
 
-		// ModuleContexts holds default host function call contexts keyed by module name.
-		ModuleContexts map[string]*ModuleContext
-
 		// TypeIDs maps each FunctionType.String() to a unique FunctionTypeID. This is used at runtime to
 		// do type-checks on indirect function calls.
 		TypeIDs map[string]FunctionTypeID
@@ -87,9 +84,13 @@ type (
 		Exports   map[string]*ExportInstance
 		Functions []*FunctionInstance
 		Globals   []*GlobalInstance
-		Memory    *MemoryInstance
-		Tables    []*TableInstance
-		Types     []*TypeInstance
+		// MemoryInstance is set when Module.MemorySection had a memory, regardless of whether it was exported.
+		// Note: This avoids the name "Memory" which is an interface method name.
+		MemoryInstance *MemoryInstance
+		Tables         []*TableInstance
+		Types          []*TypeInstance
+		// Context is set on Store Initialize and is the default host function call context for this module.
+		Context *ModuleContext
 	}
 
 	// ExportInstance represents an exported instance in a Store.
@@ -239,7 +240,6 @@ func NewStore(ctx context.Context, engine Engine) *Store {
 	return &Store{
 		ctx:                    ctx,
 		ModuleInstances:        map[string]*ModuleInstance{},
-		ModuleContexts:         map[string]*ModuleContext{},
 		TypeIDs:                map[string]FunctionTypeID{},
 		Engine:                 engine,
 		maximumFunctionAddress: maximumFunctionAddress,
@@ -248,7 +248,7 @@ func NewStore(ctx context.Context, engine Engine) *Store {
 	}
 }
 
-func (s *Store) Instantiate(module *Module, name string) (*ModuleContext, error) {
+func (s *Store) Instantiate(module *Module, name string) (*ModuleInstance, error) {
 	if err := s.requireModuleUnused(name); err != nil {
 		return nil, err
 	}
@@ -324,7 +324,7 @@ func (s *Store) Instantiate(module *Module, name string) (*ModuleContext, error)
 
 	// Build the default context for calls to this module
 	modCtx := NewModuleContext(s.ctx, s.Engine, instance)
-	s.ModuleContexts[name] = modCtx
+	instance.Context = modCtx
 
 	// Now we are safe to finalize the state.
 	rollbackFuncs = nil
@@ -336,13 +336,31 @@ func (s *Store) Instantiate(module *Module, name string) (*ModuleContext, error)
 			return nil, fmt.Errorf("module[%s] start function failed: %w", name, err)
 		}
 	}
-	return modCtx, nil
+	return instance, nil
 }
 
 // ModuleExports implements wasm.Store ModuleExports
 func (s *Store) ModuleExports(moduleName string) (publicwasm.ModuleExports, bool) {
-	e, ok := s.ModuleContexts[moduleName]
+	e, ok := s.ModuleInstances[moduleName]
 	return e, ok
+}
+
+// Function implements wasm.ModuleExports Function
+func (m *ModuleInstance) Function(name string) publicwasm.Function {
+	exp, err := m.GetExport(name, ExportKindFunc)
+	if err != nil {
+		return nil
+	}
+	return (&function{c: m.Context, f: exp.Function}).Call
+}
+
+// Memory implements wasm.ModuleExports Memory
+func (m *ModuleInstance) Memory(name string) publicwasm.Memory {
+	exp, err := m.GetExport(name, ExportKindMemory)
+	if err != nil {
+		return nil
+	}
+	return exp.Memory
 }
 
 // HostExports implements wasm.Store HostExports
@@ -448,7 +466,7 @@ func (s *Store) applyTableImport(target *ModuleInstance, tableTypePtr *TableType
 }
 
 func (s *Store) applyMemoryImport(target *ModuleInstance, memoryTypePtr *MemoryType, externModuleExportIsntance *ExportInstance) error {
-	if target.Memory != nil {
+	if target.MemoryInstance != nil {
 		// The current Wasm spec doesn't allow multiple memories.
 		return fmt.Errorf("multiple memories are not supported")
 	} else if memoryTypePtr == nil {
@@ -465,7 +483,7 @@ func (s *Store) applyMemoryImport(target *ModuleInstance, memoryTypePtr *MemoryT
 			return fmt.Errorf("incompatible memory imports: maximum size mismatch")
 		}
 	}
-	target.Memory = memory
+	target.MemoryInstance = memory
 	return nil
 }
 
@@ -649,22 +667,22 @@ func (s *Store) buildFunctionInstances(module *Module, target *ModuleInstance) (
 func (s *Store) buildMemoryInstances(module *Module, target *ModuleInstance) (rollbackFuncs []func(), err error) {
 	// Allocate memory instances.
 	for _, memSec := range module.MemorySection {
-		if target.Memory != nil {
+		if target.MemoryInstance != nil {
 			// This case the memory instance is already imported,
 			// and the current Wasm spec doesn't allow multiple memories.
 			return rollbackFuncs, fmt.Errorf("multiple memories not supported")
 		}
-		target.Memory = &MemoryInstance{
+		target.MemoryInstance = &MemoryInstance{
 			Buffer: make([]byte, memoryPagesToBytesNum(memSec.Min)),
 			Min:    memSec.Min,
 			Max:    memSec.Max,
 		}
-		s.Memories = append(s.Memories, target.Memory)
+		s.Memories = append(s.Memories, target.MemoryInstance)
 	}
 
 	// Initialize the memory instance according to the Data section.
 	for _, d := range module.DataSection {
-		if target.Memory == nil {
+		if target.MemoryInstance == nil {
 			return rollbackFuncs, fmt.Errorf("unknown memory")
 		} else if d.MemoryIndex != 0 {
 			return rollbackFuncs, fmt.Errorf("memory index must be zero")
@@ -693,7 +711,7 @@ func (s *Store) buildMemoryInstances(module *Module, target *ModuleInstance) (ro
 			return rollbackFuncs, fmt.Errorf("memory size out of limit %d * 64Ki", int(*(module.MemorySection[d.MemoryIndex].Max)))
 		}
 
-		memoryInst := target.Memory
+		memoryInst := target.MemoryInstance
 		if size > uint64(len(memoryInst.Buffer)) {
 			return rollbackFuncs, fmt.Errorf("out of bounds memory access")
 		}
@@ -799,10 +817,10 @@ func (s *Store) buildExportInstances(module *Module, target *ModuleInstance) (ro
 			}
 			ei = &ExportInstance{Kind: exp.Kind, Global: target.Globals[index]}
 		case ExportKindMemory:
-			if index != 0 || target.Memory == nil {
+			if index != 0 || target.MemoryInstance == nil {
 				return nil, fmt.Errorf("unknown memory for export[%s]", name)
 			}
-			ei = &ExportInstance{Kind: exp.Kind, Memory: target.Memory}
+			ei = &ExportInstance{Kind: exp.Kind, Memory: target.MemoryInstance}
 		case ExportKindTable:
 			if index >= uint32(len(target.Tables)) {
 				return nil, fmt.Errorf("unknown table for export[%s]", name)

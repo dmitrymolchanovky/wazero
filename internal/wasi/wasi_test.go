@@ -792,10 +792,10 @@ func instantiateWasmStore(t *testing.T, wasiFunction, wasiImport, moduleName str
 	wasiFn, err := store.AddHostFunction(wasi.ModuleSnapshotPreview1, fn)
 	require.NoError(t, err)
 
-	ctx, err := store.Instantiate(mod, moduleName)
+	instantiated, err := store.Instantiate(mod, moduleName)
 	require.NoError(t, err)
 
-	return store, ctx, wasiFn
+	return store, instantiated.Context, wasiFn
 }
 
 // maskMemory overwrites the first memory in the store with '?', so tests can see what's written.

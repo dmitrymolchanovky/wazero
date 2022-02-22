@@ -25,19 +25,19 @@ func TestMemoryInstance_HasLen(t *testing.T) {
 		},
 		{
 			name:        "maximum valid sizeInBytes",
-			offset:      memory.Len() - 8,
+			offset:      memory.Size() - 8,
 			sizeInBytes: 8,
 			expected:    true,
 		},
 		{
 			name:        "sizeInBytes exceeds the valid size by 1",
 			offset:      100, // arbitrary valid offset
-			sizeInBytes: uint64(memory.Len() - 99),
+			sizeInBytes: uint64(memory.Size() - 99),
 			expected:    false,
 		},
 		{
 			name:        "offset exceeds the memory size",
-			offset:      memory.Len(),
+			offset:      memory.Size(),
 			sizeInBytes: 1, // arbitrary size
 			expected:    false,
 		},
@@ -47,7 +47,7 @@ func TestMemoryInstance_HasLen(t *testing.T) {
 		tc := tt
 
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.expected, memory.hasLen(tc.offset, uint32(tc.sizeInBytes)))
+			require.Equal(t, tc.expected, memory.hasSize(tc.offset, uint32(tc.sizeInBytes)))
 		})
 	}
 }
@@ -274,15 +274,15 @@ func TestMemoryInstance_WriteUint32Le(t *testing.T) {
 		},
 		{
 			name:          "maximum boundary valid offset",
-			offset:        memory.Len() - 4, // 4 is the size of uint32
-			v:             1,                // arbitrary valid v
+			offset:        memory.Size() - 4, // 4 is the size of uint32
+			v:             1,                 // arbitrary valid v
 			expectedOk:    true,
 			expectedBytes: []byte{0x1, 0x00, 0x00, 0x00},
 		},
 		{
 			name:          "offset exceeds the maximum valid offset by 1",
-			offset:        memory.Len() - 4 + 1, // 4 is the size of uint32
-			v:             1,                    // arbitrary valid v
+			offset:        memory.Size() - 4 + 1, // 4 is the size of uint32
+			v:             1,                     // arbitrary valid v
 			expectedBytes: []byte{0xff, 0xff, 0xff, 0xff},
 		},
 	}
@@ -324,15 +324,15 @@ func TestMemoryInstance_WriteUint64Le(t *testing.T) {
 		},
 		{
 			name:          "maximum boundary valid offset",
-			offset:        memory.Len() - 8, // 8 is the size of uint64
-			v:             1,                // arbitrary valid v
+			offset:        memory.Size() - 8, // 8 is the size of uint64
+			v:             1,                 // arbitrary valid v
 			expectedOk:    true,
 			expectedBytes: []byte{0x1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 		},
 		{
 			name:       "offset exceeds the maximum valid offset by 1",
-			offset:     memory.Len() - 8 + 1, // 8 is the size of uint64
-			v:          1,                    // arbitrary valid v
+			offset:     memory.Size() - 8 + 1, // 8 is the size of uint64
+			v:          1,                     // arbitrary valid v
 			expectedOk: false,
 		},
 	}
@@ -375,15 +375,15 @@ func TestMemoryInstance_WriteFloat32Le(t *testing.T) {
 		},
 		{
 			name:          "maximum boundary valid offset",
-			offset:        memory.Len() - 4, // 4 is the size of float32
-			v:             0.1,              // arbitrary valid v
+			offset:        memory.Size() - 4, // 4 is the size of float32
+			v:             0.1,               // arbitrary valid v
 			expectedOk:    true,
 			expectedBytes: []byte{0xcd, 0xcc, 0xcc, 0x3d},
 		},
 		{
 			name:          "offset exceeds the maximum valid offset by 1",
-			offset:        memory.Len() - 4 + 1, // 4 is the size of float32
-			v:             math.MaxFloat32,      // arbitrary valid v
+			offset:        memory.Size() - 4 + 1, // 4 is the size of float32
+			v:             math.MaxFloat32,       // arbitrary valid v
 			expectedBytes: []byte{0xff, 0xff, 0xff, 0xff},
 		},
 	}
@@ -425,15 +425,15 @@ func TestMemoryInstance_WriteFloat64Le(t *testing.T) {
 		},
 		{
 			name:          "maximum boundary valid offset",
-			offset:        memory.Len() - 8, // 8 is the size of float64
-			v:             math.MaxFloat64,  // arbitrary valid v
+			offset:        memory.Size() - 8, // 8 is the size of float64
+			v:             math.MaxFloat64,   // arbitrary valid v
 			expectedOk:    true,
 			expectedBytes: []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xef, 0x7f},
 		},
 		{
 			name:       "offset exceeds the maximum valid offset by 1",
-			offset:     memory.Len() - 8 + 1, // 8 is the size of float64
-			v:          math.MaxFloat64,      // arbitrary valid v
+			offset:     memory.Size() - 8 + 1, // 8 is the size of float64
+			v:          math.MaxFloat64,       // arbitrary valid v
 			expectedOk: false,
 		},
 	}
@@ -474,7 +474,7 @@ func TestFunction_Call(t *testing.T) {
 	}
 	ctx := NewModuleContext(context.Background(), s.Engine, m)
 	s.ModuleInstances[name] = m
-	s.ModuleContexts[name] = ctx
+	m.Context = ctx
 
 	type testKey struct{}
 	ctxVal := context.WithValue(context.Background(), testKey{}, "test")
